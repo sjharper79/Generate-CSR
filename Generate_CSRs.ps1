@@ -1,14 +1,35 @@
-﻿<#
+﻿#region Detailed Help
+<#
  .SYNOPSIS
   This PowerShell script is to generate certificate signing requests with corresponding keys in bulk using a comma separated values input file.
   
-
  .DESCRIPTION
   Create bulk CSRs and Keys using a CSV file as input. Zip files are created with the maximum of 100 CSRs per zip to enable compatibility with uploading to the DoD NPE-Portal for Bulk Submit.
 
+  You must have OpenSSL installed on your pc and you must have the path to the OpenSSL command in your PATH environment variable.
 
- .PARAMETER CSVFilePath
-  CSVFilePath is the path to the CSV file that contains the certificate request details.
+  You must also have Java installed and have the path to the keytool.exe command in your PATH environment variable.
+
+  You must also have 7-zip installed and have teh path to the 7z.exe command in your PATH environment variable.
+
+  .PARAMETER RootPath
+  Mandatory
+  The path to the working directory that will be the root of all other files used or created by this script.
+
+  .PARAMETER CSVFile
+  CSVFilePath the CSV file that contains the certificate request details.
+  
+ .PARAMETER CSRRootDir
+  CertRootDir is the root directory where all of the files pertaining to this script will be kept. This is a relative path or a full path. 
+
+ .PARAMETER CSRDir
+ CSRDir is the directory where the CSR files will be created. This is a subdirectory of CSRRootDir and is relative path.
+
+ .PARAMETER KeyDir
+ KeyDir is the directory where the Key files will be created. This is a subdirectory of CSRRootDir and is relative path.
+
+ .PARAMETER Password
+ A SecureString password to be used as the private key password or the P12 password
 
  .EXAMPLE
   PS C:\> CSR-Requests.ps1 -CSVFilePath "C:\users\user1\desktop\certificates.csv"
@@ -33,7 +54,6 @@
   The password field is the plain-text password that will be used to protect the private key and the resulting pkcs12 file.
   The alias field is used for the Friendly Name field in the java keystore file, and is used to create csr, key, and p12 files.
 
-
  .OUTPUTS
   1) CSRs and Keys for each user in the CSV file
   2) ZIP files with up to 100 CSRs each to be uploaded to NPE by an RA
@@ -47,22 +67,83 @@
   This script comes with no warranty or guaranteee of any kind. Use at your own risk. 
 
  .LINK
-  about_functions_advanced
+ https://github.com/sjharper79/Generate-CSR
 
- .LINK
-  about_comment_based_help
+ #>
+#endregion
 
-#>
+#region Parameters
+ param(
+    [Parameter(Mandatory)] [String]$rootPath,
+    [Parameter(Mandatory)] [String]$CSVFile,
+    [String]$CSRDir,
+    [String]$KeyDir,
+    [SecureString]$Password,
+    [Switch]$CreateCSR,
+    [Switch]$ZIP,
+    [Switch]$Unzip,
+    [Switch]$CreateP12,
+    [Switch]$CreateKeyStore,
+    [Switch]$RenameFiles,
+    [Switch]$OverwriteCSV
 
-#Function to write the config file.
+)
+#endregion Parameters
+
+#region Set up variables
+#outputFolderPath is the path where files are created (including subdirs)
+$outputFolderPath = "$rootPath\output"
+#CSVFilePath is the full path to the CSVFile in the rootPath
+$CSVFilePath = "$rootPath\$(split-path $CSVFile -leaf)"
+#csrExportPath is the directory where the CSR files and subdirectories are created.
+$csrExportPath = "$outputFolderPath\CSRs"
+#keyExportPath is the directory to hold all of the generated key files.
+$keyExportPath = "$outputFolderPath\Keys"
+#condifFilePath is the path to the openssl.cfg file that this script repeatedly creates
+$configFilePath = "$rootPath\openssl.cfg"
+#keyExportPath is the directory to hold all of the generated key files.
+$zipExportPath = "$outputFolderPath\Zips"
+#endregion Set up variables
+
+
 function Write-Config ($string){ 
-    write-ouput $string | Out-File $configFilePath -Append -Encoding utf8
+#region Write-Config
+    <#
+        .SYNOPSIS 
+        Write the line of text to the openssl config file
+        .DESCRIPTION
+        The config file is stored in the $configFilePath variable and the $string variable, input to this function, will be written to the config file.
+        .INPUTS
+        $string is a string literal or a string variable that contains the line of text to add to the config file
+        .OUTPUTS
+        The function will add the line of text to the config file
+        .EXAMPLE
+        Write-Config "Hello World"
+    #>
+
+    write-output $string | Out-File $configFilePath -Append -Encoding utf8
+#endregion Write-Config
 }
 
 
-# This function will create the missing directories
 function Initialize-MissingDirectory ($dir){
-# if the exportFolderPath doesn't exist, make it
+ #region Initialize-MissingDirectory
+    <#
+        .SYNOPSIS 
+        Create the missing directories.
+        .DESCRIPTION
+        Will create any directory named $dir if it doesn't exist. 
+        .INPUTS
+        $dir is a string litteral refering to a directory, or a string variable containing a directory name
+        .OUTPUTS
+        The function will create the directory
+        .EXAMPLE
+        Initialize-MissingDirectory "c:\users\user\Desktop\HelloWorld"
+        .EXAMPLE
+        Initialize-MissingDirectory $adir
+    #>
+   
+    # if the outputFolderPath doesn't exist, make it
     if ( -not $(test-path $dir) ) {
         write-host "Creating $dir"
         New-Item -Path $dir -ItemType Directory
@@ -70,94 +151,176 @@ function Initialize-MissingDirectory ($dir){
     else {
         write-host "$dir already exists"
     }
+#endregion Initialize-MissingDirectory
 }
 
-# This function will ensure that the generation has a period (.) in it if the generation is not empty.
-function Update-Field ($certgen){
-    if ( $certgen -ne '' )
+
+function Update-Field ($certField){
+#region Update-Field
+    <#
+        .SYNOPSIS 
+        Add . to a field if the field is not empty (used for creating proper SANs in certificates)
+        .DESCRIPTION
+        This function will ensure that the generation has a period (.) in it if the generation is not empty.
+        .INPUTS
+        $certField is a string value
+        .OUTPUTS
+        The sting value with a prepended period (.), or null
+        .EXAMPLE
+        $anArray.field1 = Update-Field $anArray.field1
+    #>
+
+    if ( $certField -ne '' )
     {
-        $fixed = '.' + $certgen
+        return '.' + $certField
     }
     else {
-        $fixed = $certgen
+        return $certField
     }
-    return $fixed
+#endregion Update-Field
 }
 
-function Read-CSV ($csvpath){
+
+function Read-CSV () {
+#region Read-CSV
+    <#
+        .SYNOPSIS
+        Read the CSV file into an array
+        .DESCRIPTION
+        The CSV file contains all of the user certificates to create. Read them into an array. The CSV file must have headers.
+        .INPUTS
+        $csvpath is the path to the CSV file
+        .OUTPUTS
+        returns a two-dimensional array containing all of the content of the CSV file
+        .EXAMPLE
+        $certRequestList = Read-CSV $CSVFilePath
+    #>    
     # Import the csv file into an array
-    $certrequests = Import-CSV $importFilePath
+    $certrequests = Import-CSV $CSVFilePath
     return $certrequests
+#endregion Read-CSV
 }
+
 
 function Invoke-OpenSSL ($configFilePath, $keyfile, $csrfile) {
+#region Invoke-OpenSSL
+    <#
+        .SYNOPSIS
+        Run OpenSSL to create the CSR and Key file
+        .DESCRIPTION
+        Pass in the configFilePath, the keyFile, and csrFile variables.
+        .INPUTS
+        $configFilePath is the path to the OpenSSL config file generated for this certificate request
+        $keyFile is the fully qualified path to the keyfile that OpenSSL will generate
+        $csrFile is the fully qualified path to the CSR file that OpenSSL will generate
+
+        .OUTPUTS
+        A CSR file and a KEY file in the locations specified will be created by OpenSSL.
+
+        .EXAMPLE
+        Invoke-OpenSSL $configFile $keyFile $csrFile
+    #>
     & openssl req -new -config $configFilePath -newkey rsa:2048 -keyout $keyfile -out $csrfile
+#endregion Invoke-OpenSSL
 }
 
-#Zip up the files in batches of 100 to submit in bulk to NPE
+
 function Invoke-Zip ($ZipFileName, $ZipDir){
-    & 'C:\Program Files\7-Zip\7z.exe' a $ZipFileName $dir\*
+#region Invoke-Zip
+    <#
+        .SYNOPSIS
+        Zip up the files in batches of 100 to submit in bulk to NPE
+        .DESCRIPTION
+        NPE can accept ZIP files with up to 100 CSRs in it for the bulk submission function. This function will create a zip file with up to 100 CSRs in it
+        .INPUTS
+        $ZipFileName is the name of the Zip file you want the function to create
+        $ZipDir is the directory you want to ZIP
+        .OUTPUTS
+        Creates a ZIP file called $ZipFileName with the contents of $ZipDir (up to 100 CSR files only)
+        .EXAMPLE
+        Invoke-Zip $ZipFileName $ZipDir
+    #>
+    & 'C:\Program Files\7-Zip\7z.exe' a $ZipFileName "$dir\*"
+#endregion Invoke-Zip
 }
 
 function Invoke-Unzip ($ZipFileName, $ZipDir){
+#region Invoke-Unzip
+    <#
+        .SYNOPSIS
+        Unzip the certificate files returned by NPE
+        .DESCRIPTION
+        NPE returns Certificates in Zip files when using Submit Bulk. This function will unzip them. This is useful when receiving a lot of zip files.
+        .INPUTS
+        $ZipFileName is the file you want to unzip
+        $ZipDir is the directory to which you want to unzip the file
+        .OUTPUTS
+        The contents of the zip file unziped into the directory of your choice.
+        .EXAMPLE
+        Invoke-Unzip $ZipFileName $ZipDir
+    #>
     & 'C:\Program Files\7-Zip\7z.exe' e $ZipFileName $dir
+#endregion Invoke-Unzip
 }
 
-# This function will rename the certificate files from the filename that NPE issues the certificates in
-# to the alias found in the spreadsheet.
-function rename-certificates {
-    $certrequests = import-csv $importFilePath
-    for ($i=0; $i -lt $certrequests.Length ; $i++){
-        if ( $certrequests[$i].gen -ne '' )
-        {
-            $certrequests[$i].gen = '.' + $certrequests[$i].gen
-        }
 
+function Rename-Certificates ($certrequests) {
+#region Rename-Certificate
+    <#
+        .SYNOPSIS
+        Rename the CER files that NPE returned
+        .DESCRIPTION
+        NPE returns CER files named to match the CN of the certifcate. This can be a very long filename and can be renamed to match a shorter name. The CSV file has an alias field. 
+        You could used the alias field as a potential new name for the cert file.
+        .OUTPUTS
+        All certs in the Cert directory will be renamed
+    #>
+    
+    foreach ($cert in $certrequests){
+        Update-Field $cert.gen
         $oldName = $certrequests[$i].fname +'.' + $certrequests[$i].lname +'.' + $certrequests[$i].mi + $certrequests[$i].gen +'.' + $certrequests[$i].dodid + ".cer"
         $newName = $certrequests[$i].alias + ".cer"
         Rename-Item -Path $oldName -NewName $newName
     }
+#endregion Rename-Certificates
 }
 
-#This function will create p12 (pkcs12) files from the certs and keys.
+
 function Initialize-P12 {
-    $certrequests = import-csv $importFilePath
-    cd 'C:\Users\sjhar\OneDrive - Alesig Consulting LLC\DISA\USN Certificate Generation Task\Issued Certificates'
-    foreach ($certreq in $certrequests){
-        if ( $certreq.gen -ne '' )
-        {
-            $certreq.gen = '.' + $certreq.gen
-        }
+#region Iniitialize-P12
+    <#
+        .SYNOPSIS
+        This function will create p12 (pkcs12) files from the certs and keys.
+        .DESCRIPTION
+        PKCS12 files contain both the certificate and corresponding private key. The files can be protected with a password and can have an alias (friendly name) assigned to the cert when created. This function will create PKCS12 files.
+        .INPUTS
+        $cert is the path to the certificate file
+        $key is the path to the key file
+        $p12 is the path to the p12 file you want to store the cert and key in
+        $alias is the alias (friendly name) you want to give the cert in the P12 file. Optional if you don't want to provide an alias.
+        $keypw is the password to the key file. Optional if the password is blank.
+        $p12pw is the password you want to assign to the p12 file. Optional if you want to leave the password blank.
+        .OUTPUTS
+        A P12 file containing the cert and key, the alias provided, and the password
+    #>
+    Param
+    (
+        [Parameter(Mandatory = $true)] [string] $cert,
+        [Parameter(Mandatory = $true)] [string] $key,
+        [Parameter(Mandatory = $true)] [string] $p12,
+        [Parameter(Mandatory = $false)] [string] $alias,
+        [Parameter(Mandatory = $false)] [string] $keypw,
+        [Parameter(Mandatory = $false)] [string] $p12pw
+    )
 
-        $alias = $certreq.alias
-        $cert = "$alias.cer"
-        $key = "$alias.key"
-        $p12 = "$alias.p12"
-        $friendly = $certreq.fname +'.' + $certreq.lname +'.' + $certreq.mi + $certreq.gen +'.' + $certreq.dodid + "'s u.s. government id" 
-        openssl pkcs12 -export -in $cert -inkey $key -out $p12 -name $friendly -passout pass:password
-    }
-
+        openssl pkcs12 -export -in $cert -inkey $key -out $p12 -name $alias -passout pass:$p12pw -passin pass:$keypw
+#endregion Initialize-P12
 }
 
-# loop through all 8500 lines of the newly created array
-# This is the major part of the script.
-# It basically deletes the openssl.cfg file, then recreates it with all of the required
-# data to create a csr for the current item in the array. 
-# after it makes the cfg file, it will execute openssl with that file to make a new key and csr file.
 
 function Initialize-CertReqConfigFile ($CertInfo) {
-
-        $certrequests[$i].gen = fix-generation($certrequests[$1].gen)
-    
-        # Create a directory for the first 100 CSRs, and every 100 after that
-        if ($i % 100 -eq 0){
-            $min = $i + 1
-            $max = $i + 100
-            $apath = "Certs-$min-$max"
-            Create-100dir ($apath)
-            $batchPath = "$csrExportPath\$apath"
-        }
-
+#region Initiialize-CertReqConfigFile
+ 
         #Delete the config file
         remove-item $configFilePath -Force -ErrorAction Ignore
         
@@ -216,81 +379,139 @@ function Initialize-CertReqConfigFile ($CertInfo) {
         $csrfile = $batchPath + '\' + $certrequests[$i].alias + '.csr'
 
         # Generate the new key and CSR file.
-        call-openssl $configFilePath, $keyfile, $csrfile
+        invoke-openssl $configFilePath, $keyfile, $csrfile
 
+#endregion Initiialize-CertReqConfigFile    
+}
+
+
+function Write-Lines {
+#region Write-Lines
+    write-host ('-' * 80) -ForegroundColor Cyan 
+#endregion Write-Line
+}
+
+
+function Copy-CSVfile () {
+#region Copy-CSVfile
+    if (-not $(test-path $configFilePath)){
+        Copy-Item -path $CSVFile -destination "$rootPath"
+    }
+    elseif ($OverwriteCSV) {
+        Copy-Item -path $CSVFile -destination "$rootPath" -Force
+    }    
+#endregion Copy-CSVFile
+}
+
+
+function Initialize-100dirs ($maxItems) {
+#region Initialize-100dirs
+    for ($i=0; $i -lt $maxItems; $i+=100){
+        $min = $i + 1
+        $max = $i + 100
+        $apath = "Certs-$min-$max"
+        Initialize-MissingDirectory "$zipExportPath\$apath"
+    }
+#endregion Initialize-100dirs
+}
+
+
+#region main
+
+#region Create Missing Directories and Copy CSV File
+write-host "Creating missing directories"
+Initialize-MissingDirectory $outputFolderPath
+Initialize-MissingDirectory $keyExportPath
+Initialize-MissingDirectory $csrExportPath 
+copy-csvfile
+#endregion Create Missing Directories and Copy CSV File
+
+#region Read CSV file
+write-host "Reading CSV file"
+$certrequests = Read-CSV
+#endregion Read CSV file
+
+#region Update the Generation Field
+write-host "Updating the Generation field"
+# Update fields in array
+    for ($i=0; $i -lt $certrequests.length; $i++) {
+        $certrequests[$i].gen = Update-Field $certrequests[$i].gen 
+    }
+#endregion Update the Generation Field
+
+#region Create the CSR and Key files
+if ($CreateCSR){
+    write-host "Creating CSRs and Keys"
+    foreach ($cert in $certrequests){
+        Initialize-CertReqConfigFile ($cert)
+        write-lines
+        write-host "openssl config file for $($cert.fname) $($cert.lname)"
+        foreach($line in [System.IO.File]::ReadLines($configFilePath))
+        {
+            Write-Host $line -ForegroundColor White -BackgroundColor Black
+        }
+        Invoke-OpenSSL $configFilePath "$csrExportPath\$($cert.alias).key" "$keyExportPath\$($cert.alias).csr"
     }
 }
+#endregion Create the CSR and Key files
 
-function Initialize-Variables {
-    # Path variables
-    #rootPath is the top level directory where all of this stuff takes place
-    $global:rootPath = 'C:\Users\sjhar\OneDrive - Alesig Consulting LLC\DISA\USN Certificate Generation Task'
-    #ImportFilePath is the path to the csv file that has all of the cert requirements on it.
-    $global:importFilePath = "$global:rootPath\8500 Certs.csv"
-    #exportFolderPath is the path where files are created (including subdirs)
-    $global:exportFolderPath = "$global:rootPath\8500 CSRs"
-    #csrExportPath is the directory where the CSR files and subdirectories are created.
-    $global:csrExportPath = "$global:exportFolderPath\CSRs"
-    #keyExportPath is the directory to hold all of the generated key files.
-    $global:keyExportPath = "$global:exportFolderPath\Keys"
-    #condifFilePath is the path to the openssl.cfg file that this script repeatedly creates
-    $global:configFilePath = "$global:rootPath\openssl.cfg"
-
+#region Create the Zip files
+if ($ZIP){
+    write-host "Zipping up the CSRs and Keys"
+    $maxItems = $certrequests.length
+    initialize-100dirs $maxItems
+    foreach($dir in $(Get-ChildItem $zipExportPath -Directory)){
+        Invoke-Zip "$dir.zip" $dir
+    }    
 }
+#endregion Create the Zip files
 
-# Step 1
-# Setup Script Variables and create missing directories.
-Initialize-Variables
-Initialize-MissingDirectory $exportFolderPath
-Initialize-MissingDirectory $keyExportPath
-Initialize-MissingDirectory $crsExportPath 
-
-# Step 2
-# Get CSV file path
-
-# Step 3
-# Read CSV file
-
-# Step 4 
-# Update fields in array
-
-# Step 5
-# Create CSRs with Keys
-    # Loop
-        foreach ($User in $global:certrequests){
-            Initialize-CertReqConfigFile ($User)
-            Invoke-OpenSSL $global:configFilePath $global:keyfile $Global:cert
-        }
-    # End Loop
-
-
-# Loop
-    # Step 5a
-    # Create Config File
-
-    # Step 5b
-    # Create key and csr
-# End Loop
-
-# Step 6
-# Zip all CSRs
-
-# Step 7
-# Unzip all Certs
-
-# Step 8
-# Rename cert files
-
-# Step 9
-# Create PKCS12 files
-
-# Step 10
-# Merge PKCS12 files into Java Keystore
-
-
-$allFiles = Get-ChildItem -Path $certZipPath
-Push-Location $certZipPath
-foreach ($file in $allfiles){
-    $thisZip = $("$($file.directoryname)\$($file.name)")
-    Invoke-Unzip $thisZip 
+#region Unzip the files
+if ($Unzip){
+    write-host "Unzipping the Certificate files from NPE"
+    write-host "SKIPPING"
+    # Unzip all Certs
+    #Invoke-Unzip $ZipFileName, $ZipDir
 }
+#endregion Unzip the files
+
+#region Rename the CERT files
+if ($RenameFiles){
+    write-host "Renaming the certificate files"
+    # Rename cert files
+    Rename-Certificates $certrequests
+}
+#endregion Rename the CERT files
+
+#region Create the PKCS12 file
+if ($CreateP12){
+    write-host "Creating the P12 files"
+    # Create PKCS12 files
+    foreach ($certreq in $certrequests){
+    $alias = $certreq.alias
+    $cert = "$alias.cer"
+    $key = "$alias.key"
+    $p12 = "$alias.p12"
+    $friendly = $certreq.fname +'.' + $certreq.lname +'.' + $certreq.mi + $certreq.gen +'.' + $certreq.dodid + "'s u.s. government id" 
+    $keypw = 'password'
+    $p12pw = 'password'
+    Initialize-P12 $cert $key $p12 $friendly $keypw $p12pw 
+    }
+}
+#endregion Create the PKCS12 file
+
+#region Add PKCS12 files to keystore
+if ($CreateKeyStore){
+    write-host "Mertging the P12 files into the java keystore"
+    write-host "SKIPPING"
+    # Merge PKCS12 files into Java Keystore
+    $allFiles = Get-ChildItem -Path $certZipPath
+    Push-Location $certZipPath
+    foreach ($file in $allfiles){
+        $thisZip = $("$($file.directoryname)\$($file.name)")
+        Invoke-Unzip $thisZip 
+    }
+}
+#endregion Add PKCS12 files to keystore
+
+#endregion main
