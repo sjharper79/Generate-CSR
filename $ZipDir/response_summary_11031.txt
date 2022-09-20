@@ -1,0 +1,75 @@
+BulkId        	:	11031
+Profile       	:	tlsServer
+Email         	:	stephen.harper@alesig.com
+Submitted on  	:	2022-09-15 13:54 UTC
+
+[Results]
+Failed              	:	0
+Issued              	:	10
+Pending             	:	0
+Approved            	:	0
+Rejected            	:	0
+Canceled            	:	0
+Total Valid PKCS10s 	:	10
+
+[Details]
+fileName       	:	jones50008
+certificateCN  	:	john.jones50008.paul.I.9602550008
+requestId      	:	380691
+deviceSn      	:	
+status         	:	ISSUED - Approved by Automated Rules
+
+fileName       	:	jones50007
+certificateCN  	:	john.jones50007.paul.9602550007
+requestId      	:	380681
+deviceSn      	:	
+status         	:	ISSUED - Approved by Automated Rules
+
+fileName       	:	jones50005
+certificateCN  	:	John.jones50005.paul.Jr.9602550005
+requestId      	:	380671
+deviceSn      	:	
+status         	:	ISSUED - Approved by Automated Rules
+
+fileName       	:	jones50004
+certificateCN  	:	John.jones50004.paul.III.9602550004
+requestId      	:	380661
+deviceSn      	:	
+status         	:	ISSUED - Approved by Automated Rules
+
+fileName       	:	jones50003
+certificateCN  	:	john.jones50003.paul.II.9602550003
+requestId      	:	380651
+deviceSn      	:	
+status         	:	ISSUED - Approved by Automated Rules
+
+fileName       	:	jones50010
+certificateCN  	:	John.jones50010.paul.III.9602550010
+requestId      	:	380641
+deviceSn      	:	
+status         	:	ISSUED - Approved by Automated Rules
+
+fileName       	:	jones50009
+certificateCN  	:	john.jones50009.paul.II.9602550009
+requestId      	:	380631
+deviceSn      	:	
+status         	:	ISSUED - Approved by Automated Rules
+
+fileName       	:	jones50002
+certificateCN  	:	john.jones50002.paul.I.9602550002
+requestId      	:	380621
+deviceSn      	:	
+status         	:	ISSUED - Approved by Automated Rules
+
+fileName       	:	jones50006
+certificateCN  	:	John.jones50006.paul.Sr.9602550006
+requestId      	:	380611
+deviceSn      	:	
+status         	:	ISSUED - Approved by Automated Rules
+
+fileName       	:	jones50001
+certificateCN  	:	john.jones50001.paul.9602550001
+requestId      	:	380601
+deviceSn      	:	
+status         	:	ISSUED - Approved by Automated Rules
+
