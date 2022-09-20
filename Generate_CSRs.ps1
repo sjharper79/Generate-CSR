@@ -1,16 +1,26 @@
 ﻿#region Detailed Help
 <#
     .SYNOPSIS
-    This PowerShell script is to generate certificate signing requests with corresponding keys in bulk using a comma separated values input file.
+    Author: Stephen Harper
+    Email: sjharper79@gmail.com
+    Date: 9/20/2022
+    Purpose: to create CSRs and Key files, and merge CER and Key files in to P12 files, and put P12 files in Keystore files in extreme bulk (thousands)
+    Developed for: Defense Information Systems Agency
 
     .DESCRIPTION
+    This script was developed using PowerShell 7.2. It uses features of version 7.2 that are not available in version 5. You must use 7.2 to run this script.
+
     Create bulk CSRs and Keys using a CSV file as input. Zip files are created with the maximum of 100 CSRs per zip to enable compatibility with uploading to the DoD NPE-Portal for Bulk Submit.
+    Certificates and Keys are combined into PKCS12 files, which can then be saved into Java keystore files.
 
     You must have OpenSSL installed on your pc and you must have the path to the OpenSSL command in your PATH environment variable.
+    This script was developed with OpenSSL 3.0.5 5 Jul 2022
 
     You must also have Java installed and have the path to the keytool.exe command in your PATH environment variable.
+    This script was developed with Java 1.8.0_341
 
     You must also have 7-zip installed and have teh path to the 7z.exe command in your PATH environment variable.
+    This script was developed with 7-zip 22.01
 
     .PARAMETER RootPath
     Mandatory
@@ -20,14 +30,22 @@
     Mandatory
     CSVFilePath the CSV file that contains the certificate request details.
 
-    .PARAMETER CSRRootDir
-    Mandatory
-    CertRootDir is the root directory where all of the files pertaining to this script will be kept. This is a relative path or a full path. 
+    .PARAMETER OverwriteCSV
+    When specifying a CSV file, if the file exists in the rootdir, it will not be overwritten. Use this switch to force overwriting.
+    
+    .PARAMETER NPECertDownloadsDir
+    The path to where NPE Certificate zip files are saved.
 
     .PARAMETER Password
     Optional
-    A SecureString password to be used as the private key password
-        
+    A Switch to inform the script that you wish to provide the private key password.
+    
+    .PARAMETER P12PW
+    A Switch to inform the script that you wish to provide the PKCS12 file password.
+
+    .PARAMETER KSPW
+    A Switch to inform the script that you wish to provide the keystore file password.  
+    
     .PARAMETER CreateCSR
     This switch tells the script to create the CSR and Key files. 
 
@@ -46,28 +64,21 @@
     .PARAMETER RenameFiles
     This switch instructs the script to rename all of the files provided by NPE to the alias name found in the CSV file.
 
-    .PARAMETER OverwriteCSV
-    When specifying a CSV file, if the file exists in the rootdir, it will not be overwritten. Use this switch to force overwriting.
-
-    .PARAMETER P12PW
-    The Password for the pkcs12 file
-
-    .PARAMETER KSPW
-    The Password for the Java Keystore file
+    .EXAMPLE
+    PS C:\> .\CSR-Requests.ps1 -rootDir "C:\users\user\desktop\workingdir" -CSVFilePath "C:\users\user1\desktop\certificates.csv" -CreateCSR 
+    Will use the certificates.csv file to create all of the CSR and Key files required. All output files will be saved in subdirectories of C:\users\user\desktop\workingdir
 
     .EXAMPLE
-    PS C:\> CSR-Requests.ps1 -CSVFilePath "C:\users\user1\desktop\certificates.csv"
+    PS C:\> .\CSR-Requests.ps1 -rootDir "C:\users\user\desktop\workingdir" -CSVFilePath "C:\users\user1\desktop\certificates.csv" -Zip
+    Will Zip all of the CSR files into zip files with 100 files in each
+
+    .EXAMPLE
+    PS C:\> .\CSR-Requests.ps1 -rootDir "C:\users\user\desktop\workingdir" -CSVFilePath "C:\users\user1\desktop\certificates.csv" -CreateP12 -Password -P12PW
+    Will use the cer files and the key files to generate PKCS12 files. Will prompt for the private key password and the password to use on the PKCS12 file.
 
     .INPUTS
     CSV file formatted with at least the following fields:
-    lname
-    fname
-    mi
-    gen
-    san
-    DODID
-    password
-    alias
+    lname, fname, mi, gen, san, DODID, alias
 
     The lname field is the user's last name.
     The fname field is the user's first name.
@@ -75,7 +86,6 @@
     The gen field is the generation of the user (egu. I, II, III, Jr. Sr. Etc.).
     The san field is the user's email address and will be the subject alternate name in the RFC822Name format in the resulting Certificate.
     The DODID field is the 10-digit DoD EDIPI or other identifier.
-    The password field is the plain-text password that will be used to protect the private key and the resulting pkcs12 file.
     The alias field is used for the Friendly Name field in the java keystore file, and is used to create csr, key, and p12 files.
 
     .OUTPUTS
